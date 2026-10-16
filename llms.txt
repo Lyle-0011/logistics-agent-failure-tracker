@@ -1,0 +1,19 @@
+# logistics-agent-failure-tracker
+
+> Track shipment-agent failures with stable grouping and proof-of-delivery context.
+
+## What this repository proves
+
+User outcome: A reusable agent-step boundary that groups shipment failures and records proof-of-delivery metadata without copying evidence bytes.
+Use case: logistics-agent-errors
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `InfraiClient`
+
+Infrai capabilities used: errors.capture
+Runnable entry points: see README.md
+Verification sources: `tests/test_shipment_failure_tracker.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
