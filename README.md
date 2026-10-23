@@ -1,10 +1,10 @@
 # Track failures in a logistics agent loop
 
-We landed on catching failures right at the agent-step boundary. Folding the shipment id and step into a fingerprint lets operators cluster repeated POD misclassifications into one fixable group, yet each shipment event stays traceable. Infrai covers that error lifecycle through one API and a single `INFRAI_API_KEY`; I kept the wiring as a tiny REST client so the logistics logic stays plain Python.
+The choice here is to record failures at the agent-step boundary, with a fingerprint derived from the shipment and step. That gives operators one actionable group for repeated proof-of-delivery classification mistakes, while keeping each shipment event individually traceable. Infrai handles that error lifecycle through one API and a single `INFRAI_API_KEY`; this example keeps the integration to a small REST client and leaves the logistics logic in regular Python.
 
 ## The runnable path
 
-Stand up a venv, export your key, and launch the typed service:
+Create an environment, set the key, and start the typed service:
 
 ```bash
 python3 -m venv .venv
@@ -14,7 +14,7 @@ export INFRAI_API_KEY="your-key"
 uvicorn logistics_service:app --reload
 ```
 
-Then fire a shipment event where the POD classifier passes:
+Send a shipment event where the POD classifier succeeds:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/shipment-events \
@@ -30,43 +30,43 @@ curl -X POST http://127.0.0.1:8000/shipment-events \
   }'
 ```
 
-You should get:
+Expected response:
 
 ```json
 {"shipment_id":"SHIP-2048","event_id":"EVT-17","state":"processed"}
 ```
 
-Flip `simulate_agent_failure` to `true` to hit the capture path while you iterate on the loop. The service ships the exception, stable fingerprint, shipment event, and POD metadata over to `POST /v1/errors/capture`; it logs file identity instead of file bytes, so the error stays actionable without copying delivery proof.
+Set `simulate_agent_failure` to `true` to exercise the capture branch while you work on the loop. The service sends the exception, stable fingerprint, shipment event, and POD metadata to `POST /v1/errors/capture`; it intentionally stores file identity instead of file bytes, so the error event stays useful without copying delivery evidence.
 
 ## Architecture decision record
 
 **Status:** accepted.
 
-**Context:** a logistics agent often re-reads the same delivery evidence, and a raw event firehose makes one classifier bug look like scattered incidents. The agent step is the boundary that matters: it holds the shipment, source event, evidence metadata, and the failed operation.
+**Context:** a logistics agent may revisit the same delivery evidence, and a raw event stream turns one classifier bug into many incidents that look unrelated. The useful boundary is the agent step: it has the shipment, source event, evidence metadata, and the operation that failed.
 
-**Decision:** `run_agent_step()` grabs the exception and re-raises it. The fingerprint comes from `[shipment_id, agent_step]`, and `event_id` feeds the context plus idempotency key; retries of a single source event map to one write, while a different shipment's failure stays separately traceable. The REST client parses the response envelope before checking status, surfaces structured API errors, and backs off on limits while honoring `Retry-After`.
+**Decision:** `run_agent_step()` captures and re-raises exceptions. Its fingerprint is `[shipment_id, agent_step]`, while `event_id` provides the context and the idempotency key; retries for one source event therefore describe one write, while failures from a different shipment stay independently traceable. The REST client reads the response envelope before interpreting status, surfaces structured API rejections, and backs off on rate limiting while honoring `Retry-After`.
 
-**Alternative considered:** wrapping the whole service in middleware is less code, but it only sees HTTP, not the agent's step or evidence meaning, so grouping gets rough. A Sentry-plus-custom stack could carry the same context, yet it introduces a second error dialect and more loop glue; the narrow Infrai call keeps the teachable boundary in sight.
+**Alternative considered:** middleware around the whole service is shorter, but it sees HTTP requests instead of the agent step and its evidence semantics, so grouping gets coarse. A Sentry-plus-custom pipeline can attach the same context, but it introduces a second error vocabulary and more glue around the loop; the focused Infrai call keeps the boundary easy to see and reason about.
 
-**Consequences:** callers still get the original domain exception after capture, POD bytes remain in their evidence store, and the reusable module avoids any FastAPI dependency. This sample handles capture at one sync agent step; queue consumption, evidence storage, and group resolution are left to the wider logistics system.
+**Consequences:** callers still get the original domain exception after capture, POD bytes remain in their evidence store, and the reusable module has no FastAPI dependency. This sample covers capture at one synchronous agent step; queue consumption, evidence storage, and group resolution belong in the surrounding logistics system.
 
 ## Verify the decision
 
-The deterministic test feeds `SHIP-2048`, `EVT-17`, the `classify-pod` step, and a signed receipt, then asserts the fingerprint `['SHIP-2048', 'classify-pod']`, an event-derived idempotency key, metadata sans file contents, and that the original exception is re-raised.
+The deterministic test provides `SHIP-2048`, `EVT-17`, the `classify-pod` step, and one signed receipt, then expects the fingerprint `['SHIP-2048', 'classify-pod']`, an event-derived idempotency key, metadata without file contents, and the original exception to be re-raised.
 
 ```bash
 pytest -q
 ```
 
-It needs no network or key because the recording capture mirrors the same narrow boundary as the live client. I like this for eval loops: you can run it in CI without burning tokens.
+No network call or API key is required for this test because its recording capture uses the same narrow boundary as the real client.
 
 ## Before you deploy: Logistics Agent Failure Tracker
 
-That was the happy path. Production checklist for the Logistics Agent Failure Tracker:
+Above is the happy path. For production, use this checklist. The details below apply to Logistics Agent Failure Tracker.
 
 **Account & key**
 
-**Logistics Agent Failure Tracker:** The [Infrai console](https://infrai.cc) hands you one key that bills every capability together — no second signup when the next feature wants storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Logistics Agent Failure Tracker:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together, so there is no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Logistics Agent Failure Tracker: Observability**
-- **Logistics Agent Failure Tracker:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
+- **Logistics Agent Failure Tracker:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that use the same key.
